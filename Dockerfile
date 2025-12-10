@@ -18,6 +18,9 @@ RUN pip install -r requirements.txt
 # Copy source
 COPY . /app
 
-EXPOSE 8501
+# Use PORT env var (Render provides $PORT). Default to 8501 for local runs.
+ENV PORT=8501
+EXPOSE ${PORT}
 
-CMD ["streamlit", "run", "app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+# Start Streamlit listening on the provided port
+CMD ["sh", "-c", "streamlit run app.py --server.port ${PORT} --server.address 0.0.0.0"]
