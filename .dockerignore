@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+env
+ENV
+.git
+*.ipynb
+*.h5
+model/
+dist/
+build/
+*.egg-info
