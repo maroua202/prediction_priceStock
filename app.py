@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
-# Try to import TensorFlow; if not available (Streamlit Cloud), fall back to a lightweight predictor
+# Try to import TensorFlow; if unavailable on Streamlit Cloud, fall back to a lightweight predictor
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
@@ -13,6 +13,7 @@ except Exception:
 from sklearn.preprocessing import MinMaxScaler
 import datetime
 import matplotlib.pyplot as plt
+import os
 
 # Configuration de page Streamlit
 st.set_page_config(
@@ -57,6 +58,14 @@ show_data = st.sidebar.checkbox("Afficher les données historiques", value=True)
 # ==================== BOUTON DE LANCEMENT ====================
 st.sidebar.markdown("---")
 run_button = st.sidebar.button("🚀 Lancer la prédiction", use_container_width=True)
+
+# Mot de passe pour accéder à l'application
+PASSWORD = os.getenv("APP_PASSWORD", "")
+if PASSWORD:
+    pwd = st.sidebar.text_input("Mot de passe", type="password")
+    if pwd != PASSWORD:
+        st.sidebar.warning("Entrez le mot de passe pour continuer.")
+        st.stop()
 
 # ==================== EXÉCUTION PRINCIPALE ====================
 if run_button:
@@ -139,24 +148,17 @@ if run_button:
                     np.array(future_predictions).reshape(-1, 1)
                 )
         else:
-            # Fallback predictor (no TensorFlow). Simple deterministic extrapolation
-            with st.spinner("🔁 En utilisant le prédicteur de repli (pas de TensorFlow)..."):
-                # Use last N days to compute linear trend, then extrapolate
+            # Fallback predictor (no TensorFlow): linear trend extrapolation on recent data
+            with st.spinner("🔁 Utilisation d'un prédicteur de repli (pas de TensorFlow)..."):
                 window = min(60, len(data))
-                recent = data['Close'].iloc[-window:].values
-                # If insufficient data, repeat last price
+                recent = data['Close'].iloc[-window:].astype(float).values
                 if len(recent) < 2:
                     future_predictions = np.array([recent[-1]] * days).reshape(-1, 1)
                 else:
-                    # Fit linear trend on recent prices
                     x = np.arange(len(recent))
-                    coef = np.polyfit(x, recent, 1)
-                    slope, intercept = coef[0], coef[1]
-                    future_predictions = []
-                    for i in range(1, days + 1):
-                        pred = intercept + slope * (len(recent) + i - 1)
-                        future_predictions.append(pred)
-                    future_predictions = np.array(future_predictions).reshape(-1, 1)
+                    slope, intercept = np.polyfit(x, recent, 1)
+                    preds = [intercept + slope * (len(recent) + i) for i in range(days)]
+                    future_predictions = np.array(preds).reshape(-1, 1)
 
             # Step 7: Créer le DataFrame des prédictions
             forecast_dates = pd.date_range(
