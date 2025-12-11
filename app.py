@@ -2,9 +2,19 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    USE_TF = True
+except Exception:
+    # TensorFlow not available in the environment (common on Streamlit Cloud)
+    tf = None
+    Sequential = None
+    LSTM = None
+    Dense = None
+    Dropout = None
+    USE_TF = False
 
 # Lightweight MinMax scaler replacement to avoid scikit-learn dependency
 class SimpleMinMaxScaler:
@@ -139,51 +149,76 @@ if run_button:
             scaler = SimpleMinMaxScaler(feature_range=(0, 1))
             scaled_data = scaler.fit_transform(data.values)
 
-            # Step 3: Préparer les données d'entraînement
-            training_data_len = int(np.ceil(len(scaled_data) * 0.8))
-            train_data = scaled_data[:training_data_len, :]
+            if USE_TF:
+                # Step 3: Préparer les données d'entraînement
+                training_data_len = int(np.ceil(len(scaled_data) * 0.8))
+                train_data = scaled_data[:training_data_len, :]
 
-            x_train, y_train = [], []
+                x_train, y_train = [], []
 
-            for i in range(60, len(train_data)):
-                x_train.append(train_data[i-60:i, 0])
-                y_train.append(train_data[i, 0])
+                for i in range(60, len(train_data)):
+                    x_train.append(train_data[i-60:i, 0])
+                    y_train.append(train_data[i, 0])
 
-            x_train = np.array(x_train)
-            y_train = np.array(y_train)
-            x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
+                x_train = np.array(x_train)
+                y_train = np.array(y_train)
+                x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
 
-            # Step 4: Créer le modèle LSTM
-            model = Sequential([
-                LSTM(50, return_sequences=True, input_shape=(60, 1)),
-                Dropout(0.2),
-                LSTM(50),
-                Dropout(0.2),
-                Dense(25),
-                Dense(1)
-            ])
+                # Step 4: Créer le modèle LSTM
+                model = Sequential([
+                    LSTM(50, return_sequences=True, input_shape=(60, 1)),
+                    Dropout(0.2),
+                    LSTM(50),
+                    Dropout(0.2),
+                    Dense(25),
+                    Dense(1)
+                ])
 
-            model.compile(optimizer='adam', loss='mean_squared_error')
+                model.compile(optimizer='adam', loss='mean_squared_error')
 
-            # Step 5: Entraîner le modèle
-            model.fit(x_train, y_train, batch_size=1, epochs=1, verbose=0)
+                # Step 5: Entraîner le modèle
+                model.fit(x_train, y_train, batch_size=1, epochs=1, verbose=0)
+            else:
+                # No TensorFlow available - skip training. We'll use a lightweight fallback predictor later.
+                model = None
 
         with st.spinner("🔮 Génération des prédictions..."):
             # Step 6: Prédire les jours futurs
-            last_60_days = scaled_data[-60:]
-            x_future = last_60_days.reshape((1, 60, 1))
+            if USE_TF and model is not None:
+                last_60_days = scaled_data[-60:]
+                x_future = last_60_days.reshape((1, 60, 1))
 
-            future_predictions = []
+                future_predictions = []
 
-            for _ in range(days):
-                pred = model.predict(x_future, verbose=0)
-                future_predictions.append(pred[0, 0])
-                x_future = np.append(x_future[:, 1:, :], [[pred[0]]], axis=1)
+                for _ in range(days):
+                    pred = model.predict(x_future, verbose=0)
+                    future_predictions.append(pred[0, 0])
+                    x_future = np.append(x_future[:, 1:, :], [[pred[0]]], axis=1)
 
-            # Dénormaliser les prédictions
-            future_predictions = scaler.inverse_transform(
-                np.array(future_predictions).reshape(-1, 1)
-            )
+                # Dénormaliser les prédictions
+                future_predictions = scaler.inverse_transform(
+                    np.array(future_predictions).reshape(-1, 1)
+                )
+            else:
+                # Fallback predictor (no TensorFlow): simple linear extrapolation of recent trend
+                close_vals = data['Close'].values
+                if len(close_vals) >= 7:
+                    recent = close_vals[-7:]
+                else:
+                    recent = close_vals
+                diffs = np.diff(recent)
+                if len(diffs) > 0:
+                    avg_daily_change = float(np.mean(diffs))
+                else:
+                    avg_daily_change = 0.0
+
+                future_predictions = []
+                last_price = float(close_vals[-1])
+                for _ in range(days):
+                    last_price = last_price + avg_daily_change
+                    future_predictions.append(last_price)
+
+                future_predictions = np.array(future_predictions).reshape(-1, 1)
 
             # Step 7: Créer le DataFrame des prédictions
             forecast_dates = pd.date_range(
