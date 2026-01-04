@@ -1,6 +1,5 @@
 streamlit
-numpy<2.0
 pandas
-yfinance
+requests
 matplotlib
 tensorflow

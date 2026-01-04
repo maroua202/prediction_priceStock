@@ -1,13 +1,16 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import requests
+from io import StringIO
+import datetime
+from  matplotlib import pyplot as plt
+
+# Pour le modèle LSTM (reste basique pour l'exemple)
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-import datetime
-import matplotlib.pyplot as plt
 
 # Configuration de page Streamlit
 st.set_page_config(
@@ -53,21 +56,103 @@ show_data = st.sidebar.checkbox("Afficher les données historiques", value=True)
 st.sidebar.markdown("---")
 run_button = st.sidebar.button("🚀 Lancer la prédiction", use_container_width=True)
 
+
+def fetch_data_csv_yahoo(ticker: str, start: str, end: str) -> tuple[pd.DataFrame, str]:#ticker : Symbole boursier (ex: AAPL, GOOGL)
+    """
+    Télécharge l'historique des prix depuis l'endpoint CSV de Yahoo Finance.
+    Retourne un tuple (DataFrame, error_msg). Si tout va bien, error_msg == ''.
+    La fonction tente d'abord une requête sur la page d'historique pour
+    récupérer les cookies nécessaires puis télécharge le CSV via le endpoint.
+    """
+    error_msg = ""
+    try:
+        period1 = int(pd.Timestamp(start).timestamp())
+        period2 = int(pd.Timestamp(end).timestamp())
+    except Exception as e:
+        return pd.DataFrame(), f"Invalid date: {e}"
+
+    download_url = (
+        f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}"
+        f"?period1={period1}&period2={period2}&interval=1d&events=history&includeAdjustedCl¨£ose=true"
+    )
+
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+                      " Chrome/117.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+    # Hit the history page first to establish cookies
+    try:
+        history_url = f"https://finance.yahoo.com/quote/{ticker}/history?p={ticker}"
+        session.get(history_url, headers=headers, timeout=10)
+    except Exception:
+        # not fatal, continue to try download
+        pass
+ 
+    try:
+        resp = session.get(download_url, headers=headers, timeout=10)
+    except Exception as e:
+        return pd.DataFrame(), f"Request error: {e}"
+
+    # If Yahoo blocks (401 / unauthorized), essayer une source alternative (Stooq)
+    if resp.status_code == 401 or 'unauthorized' in (resp.text or '').lower():
+        # Stooq expects lowercase ticker with .us for US stocks
+        tik = ticker.lower()
+        if not tik.endswith('.us'):
+            tik_stooq = f"{tik}.us"
+        else:
+            tik_stooq = tik
+        stooq_url = f"https://stooq.com/q/d/l/?s={tik_stooq}&i=d"
+        try:
+            resp2 = requests.get(stooq_url, timeout=10)
+        except Exception as e:
+            return pd.DataFrame(), f"Yahoo 401 and Stooq request error: {e}"
+
+        if resp2.status_code != 200 or not resp2.text.strip():
+            return pd.DataFrame(), f"Yahoo 401 and Stooq HTTP {resp2.status_code}"
+
+        try:
+            df = pd.read_csv(StringIO(resp2.text), parse_dates=['Date'], index_col='Date')
+            return df, ''
+        except Exception as e:
+            return pd.DataFrame(), f"Stooq CSV parse error: {e}"
+
+    if resp.status_code != 200 or resp.text.strip() == "":
+        snippet = resp.text[:500].replace('\n', ' ') if resp.text else ''
+        return pd.DataFrame(), f"HTTP {resp.status_code} - Response snippet: {snippet}"
+
+    try:
+        df = pd.read_csv(StringIO(resp.text), parse_dates=['Date'], index_col='Date')
+    except Exception as e:
+        return pd.DataFrame(), f"CSV parse error: {e}"
+
+    return df, ''
+
 # ==================== EXÉCUTION PRINCIPALE ====================
 if run_button:
 
     with st.spinner(f"⏳ Téléchargement des données pour {ticker}..."):
-        # Step 1: Télécharger les données
-        data = yf.download(
+        # Step 1: Télécharger les données via l'endpoint CSV Yahoo
+        data, err = fetch_data_csv_yahoo(
             ticker,
             start='2020-01-01',
-            end=datetime.datetime.today().strftime('%Y-%m-%d'),
-            progress=False
+            end=datetime.datetime.today().strftime('%Y-%m-%d')
         )
-        data = data[['Close']]
+
+        if err:
+            # Afficher un message d'erreur diagnostic pour aider à comprendre pourquoi
+            st.error(f"❌ Impossible de récupérer les données : {err}")
+
+        if not data.empty and 'Close' in data.columns:
+            data = data[['Close']]
 
     if data.empty:
-        st.error(f"❌ Erreur : Le symbole '{ticker}' n'existe pas. Vérifiez l'orthographe !")
+        if not err:
+            st.error(f"❌ Erreur : Le symbole '{ticker}' n'existe pas. Vérifiez l'orthographe !")
+        # on arrête ici si pas de données
     else:
         # Afficher les données historiques si demandé
         if show_data:
