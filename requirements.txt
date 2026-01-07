@@ -2,4 +2,4 @@ streamlit
 pandas
 requests
 matplotlib
-tensorflow==2.16.1
+scikit-learn
